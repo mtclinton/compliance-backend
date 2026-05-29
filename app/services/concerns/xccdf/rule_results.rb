@@ -41,21 +41,16 @@ module Xccdf
       selected_op_rule_results.select { |rr| tailoring_rule_ids.key?(rr.id) }
     end
 
-    # Selected results we can't place in the tailoring — these are ignored
-    # and are the signal that the report is mismatched.
-    def unattributable_op_rule_results
-      selected_op_rule_results.reject { |rr| tailoring_rule_ids.key?(rr.id) }
-    end
-
-    # The report was produced against a rule set that doesn't line up with
-    # the policy's tailoring (typically a different SSG version), so the
-    # results we can show are only partial.
-    # NOTE (Q4): defined here as the ref-id attribution gap. Could also be
-    # OR'd with an explicit SSG-version inequality — flagged for Janos.
+    # A report is "mismatched" when the SSG version it was generated against
+    # (the package installed on the system) differs from the SSG version of
+    # the policy's tailoring. Per team direction (Step 1): still attribute
+    # what we can to the tailoring and flag the result so the FE can ask the
+    # customer to match versions — same spirit as `supported`. Rejecting
+    # mismatched reports outright is Step 2 (future, after IoP remediations).
     def mismatched?
       return @mismatched if defined?(@mismatched)
 
-      @mismatched = unattributable_op_rule_results.any?
+      @mismatched = tailoring.security_guide_version != security_guide.version
     end
 
     private
