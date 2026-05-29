@@ -21,14 +21,13 @@ module Xccdf
       @test_result
     end
 
-    # RHINENG-18501 (Q6): a mismatched/partial result must not evict a prior
-    # good (non-mismatched) result for the same tailoring+system — otherwise
-    # a single bad upload makes the customer's last good data disappear.
+    # Keep only the latest result per (tailoring, system). A mismatched result
+    # is just the newest scan — flagged for the FE — and evicts prior ones the
+    # same way an `unsupported` result does (team direction, Step 1).
     def delete_old_test_results
-      scope = ::V2::TestResult.where(tailoring: @tailoring, system: @system)
-                              .where.not(id: @test_result.id)
-      scope = scope.where(mismatched: true) if @test_result.mismatched?
-      scope.destroy_all
+      ::V2::TestResult.where(tailoring: @tailoring, system: @system)
+                      .where.not(id: @test_result.id)
+                      .destroy_all
     end
 
     def supported?
