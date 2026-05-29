@@ -107,29 +107,29 @@ class XccdfReportParser
     # rubocop:enable Style/GuardClause
   end
 
-  def check_for_missing_rules
-    # rubocop:disable Style/GuardClause
-    if test_result_rules_unknown.any?
-      raise UnknownRuleError,
-            'The following rules are missing from profile ' \
-            "#{tailored_profile.ref_id} in benchmark #{security_guide.ref_id} " \
-            "with SSG #{security_guide.version}:\n" \
-            "#{test_result_rules_unknown.join("\n")}\n#{parse_failure_message}"
-    end
-    # rubocop:enable Style/GuardClause
-  end
+  # NOTE (RHINENG-18501): a missing/mismatched rule set is no longer a hard
+  # rejection. When the uploaded report is based on a different SSG version,
+  # we accept it, flag the TestResult as `mismatched`, and persist only the
+  # rule results we can attribute to the tailoring (see Xccdf::RuleResults).
+  # The previous UnknownRuleError reject path is intentionally removed.
 
   def check_for_missing_benchmark_info
     check_for_missing_security_guide
     check_for_missing_tailored_profile
-    check_for_missing_rules
   end
 
-  def save_all
+  # Everything that must hold for a report to be accepted. Runs in the Kafka
+  # consumer (Kafka::ReportParser) so invalid reports are rejected before a
+  # job is enqueued — the job no longer re-validates.
+  def validate!
     check_os_version
     check_for_external_reports
     check_for_missing_benchmark_info
+  end
 
+  # Persistence only. Runs in ParseReportJob; trusts the consumer's
+  # validation and just writes the results inside a transaction.
+  def persist!
     V2::System.transaction do
       save_all_test_result_info
     end

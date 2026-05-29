@@ -9,7 +9,9 @@ module Xccdf
       @test_result = ::V2::TestResult.create!(
         system: @system, tailoring: tailoring,
         supported: supported?, score: score,
-        failed_rule_count: selected_op_rule_results&.count { |rr| ::V2::RuleResult::FAILED.include?(rr.result) }.to_i,
+        mismatched: mismatched?,
+        # Count only failures among the rules we could attribute to the tailoring.
+        failed_rule_count: attributable_op_rule_results&.count { |rr| ::V2::RuleResult::FAILED.include?(rr.result) }.to_i,
         start_time: @op_test_result.start_time.in_time_zone,
         end_time: @op_test_result.end_time.in_time_zone
       )
@@ -19,6 +21,9 @@ module Xccdf
       @test_result
     end
 
+    # Keep only the latest result per (tailoring, system). A mismatched result
+    # is just the newest scan — flagged for the FE — and evicts prior ones the
+    # same way an `unsupported` result does (team direction, Step 1).
     def delete_old_test_results
       ::V2::TestResult.where(tailoring: @tailoring, system: @system)
                       .where.not(id: @test_result.id)
