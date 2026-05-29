@@ -13,17 +13,12 @@ module Kafka
       @logger = logger
     end
 
-    # rubocop:disable Metrics/MethodLength
     def parse_reports
-      # Map successfuly parsed (validated) reports by scanned profile
-      parsed_reports = downloaded_reports.map do |xml|
-        [parse(xml).test_result_file.test_result.profile_id, xml]
-      end
-      # Evaluate each report individually and notify about the result
-      parsed_reports.each_with_index do |(profile_id, _report), idx|
-        job = enqueue_parsing(profile_id, idx)
-        notify_report_success(profile_id, job.jid)
-      end
+      # Validate each report up front (RHINENG-18501): invalid reports are
+      # rejected here, in the consumer, so the job never has to re-validate
+      # or re-download. Valid reports are handed to the job as a packed
+      # payload, eliminating the second download.
+      downloaded_reports.each { |xml| validate_and_enqueue(xml) }
       produce_validation_message('success')
     rescue EntitlementError, ReportParseError => e
       parse_error(e)
@@ -31,12 +26,25 @@ module Kafka
       parse_error(e)
       raise
     end
-    # rubocop:enable Metrics/MethodLength
 
     private
 
-    def enqueue_parsing(profile_id, idx)
-      ParseReportJob.perform_later(idx, metadata) or
+    def validate_and_enqueue(xml)
+      parser = XccdfReportParser.new(xml, metadata)
+      parser.validate!
+      profile_id = parser.test_result_file.test_result.profile_id
+      job = enqueue_parsing(profile_id, xml)
+      notify_report_success(profile_id, job.jid)
+    rescue *XccdfReportParser::ERRORS, PG::Error, ActiveRecord::StatementInvalid => e
+      # A single invalid report is rejected on its own; sibling reports in
+      # the same payload are still processed.
+      parse_error(e)
+    rescue StandardError
+      raise ReportParseError, 'Report parsing failed'
+    end
+
+    def enqueue_parsing(profile_id, xml)
+      ParseReportJob.perform_later(ReportArtifact.pack(xml), metadata) or
         raise ReportParseError, "Failed to enqueue parsing of #{profile_id}"
     end
 
@@ -101,14 +109,6 @@ module Kafka
 
     def url
       @message.dig('platform_metadata', 'url')
-    end
-
-    def parse(xml)
-      XccdfReportParser.new(xml, metadata)
-    rescue PG::Error, ActiveRecord::StatementInvalid => e
-      parse_error(e)
-    rescue StandardError
-      raise ReportParseError, 'Report parsing failed'
     end
 
     def produce_validation_message(result)
