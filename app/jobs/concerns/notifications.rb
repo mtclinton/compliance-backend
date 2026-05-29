@@ -8,10 +8,14 @@ module Notifications
     private
 
     def compliance_notification_wrapper
-      # Store the notification preconditions before saving the report
+      # Capture the notification preconditions before the new result is saved.
       preconditions = policy_previously_compliant? || policy_untested?
 
       yield
+
+      # Don't alert on a mismatched (partial / unreliable) result — the score
+      # isn't meaningful when the report's rule set doesn't match the tailoring.
+      return if parser.mismatched?
 
       # Produce a notification if preconditions are met and the new score is below threshold
       return unless parser.supported? && preconditions && parser.score < parser.policy.compliance_threshold
@@ -20,23 +24,27 @@ module Notifications
       Rails.logger.info('Notification emitted due to non-compliance')
     end
 
-    # Notifications should be only allowed if there are no test results or the policy was previously compliant
+    # The system's most recent prior result for this tailoring (the view is
+    # already "latest per tailoring+system"; this runs before the new save).
+    def previous_test_result
+      ::V2::TestResult.find_by(system_id: parser.system.id, tailoring_id: parser.tailoring.id)
+    end
+
+    # Only notify when there were no results yet, or the policy was compliant.
     def policy_previously_compliant?
-      parser.policy&.compliant?(parser.host)
+      tr = previous_test_result
+      tr.present? && tr.score >= parser.policy.compliance_threshold
     end
 
     def policy_untested?
-      parser.policy&.test_result_hosts&.where(id: parser.host.id)&.empty?
+      previous_test_result.nil?
     end
 
     def notify_non_compliant!
-      # FIXME: after rewriting the parser to use V2::Policy, the additional lookup can be removed
-      v2_policy = V2::Policy.find_by(id: parser.policy.id)
-
       SystemNonCompliant.deliver(
-        system: parser.host,
+        system: parser.system,
         org_id: @msg_value['org_id'],
-        policy: v2_policy,
+        policy: parser.policy,
         compliance_score: parser.score
       )
     end
